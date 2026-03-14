@@ -6,7 +6,6 @@ import re
 st.set_page_config(page_title="Recette Fonctionnelle", layout="wide")
 st.title("Validation des Recettes")
 
-# --- NOUVEAUTÉ : Initialisation de la mémoire pour conserver les frappes entre les tableaux ---
 if 'sauvegardes' not in st.session_state:
     st.session_state['sauvegardes'] = {}
 
@@ -46,7 +45,6 @@ def get_type_number(title):
         return int(match.group(1))
     return 9999
 
-# Fonction pour préparer un tableau brut avec les nouvelles colonnes
 def preparer_tableau(csv_string):
     df = pd.read_csv(io.StringIO(csv_string), sep=";", index_col=False)
     df = df.fillna("")
@@ -54,17 +52,27 @@ def preparer_tableau(csv_string):
     df = df.replace(r'^\s*CCTP\s*$', '', regex=True)
     
     colonnes_commentaires = []
-    if len(df.columns) >= 1:
-        colonnes = list(df.columns)
-        if 'Unnamed' in str(colonnes[0]) or colonnes[0] == '':
-            colonnes[0] = "Caractéristique"
-        df.columns = colonnes
+    if len(df.columns) >= 2:
+        col_0 = df.columns[0]
+        col_1 = df.columns[1]
         
-        nouvel_ordre = [df.columns[0]]
+        # --- NOUVEAUTÉ : Fusion des deux premières colonnes ---
+        # On fusionne le texte avec un espace entre les deux
+        df[col_1] = df[col_0].str.strip() + " " + df[col_1].str.strip()
+        # On supprime l'ancienne première colonne
+        df = df.drop(columns=[col_0])
+        # On renomme la colonne fusionnée "Besoin"
+        df.rename(columns={col_1: "Besoin"}, inplace=True)
         
-        for col in df.columns[1:]:
-            nouvel_ordre.append(col)
-            valeur_catalogue = str(df[col].iloc[0]).strip()
+        nouvel_ordre = ["Besoin"]
+        
+        for col in df.columns:
+            if col != "Besoin":
+                nouvel_ordre.append(col)
+                valeur_catalogue = str(df[col].iloc[0]).strip()
+            else:
+                valeur_catalogue = ""
+                
             is_besoin = (col == 'Besoin')
             is_prop_valide = col.startswith('Proposition') and valeur_catalogue != "" and valeur_catalogue.lower() != "nan"
             
@@ -79,7 +87,9 @@ def preparer_tableau(csv_string):
                 colonnes_commentaires.extend([col_ekla, col_memo])
         
         df = df[nouvel_ordre]
-        df = df.set_index(df.columns[0])
+        
+        # La colonne fusionnée "Besoin" devient notre colonne figée
+        df = df.set_index("Besoin")
         
     return df, colonnes_commentaires
 
@@ -93,27 +103,26 @@ if uploaded_files:
     if tables_dict:
         noms_tableaux = sorted(list(tables_dict.keys()), key=get_type_number)
         
-        # --- NOUVEAUTÉ : Génération du Classeur Excel global ---
         output_excel = io.BytesIO()
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
             for nom_tab in noms_tableaux:
                 cle_sauvegarde = f"{fichier_selectionne}_{nom_tab}"
                 
-                # Si on a modifié ce tableau, on prend la version modifiée. Sinon, la version brute.
                 if cle_sauvegarde in st.session_state['sauvegardes']:
                     df_export = st.session_state['sauvegardes'][cle_sauvegarde]
                 else:
                     csv_str = "\n".join(tables_dict[nom_tab])
                     df_export, _ = preparer_tableau(csv_str)
                 
-                # Nettoyage du nom de l'onglet (Excel limite à 31 caractères et interdit certains symboles)
                 nom_onglet = str(nom_tab)[:31]
                 nom_onglet = re.sub(r'[\\*?:/\[\]]', '', nom_onglet)
                 df_export.to_excel(writer, sheet_name=nom_onglet)
         
         donnees_excel = output_excel.getvalue()
         
-        # Le bouton de téléchargement est toujours visible en haut
+        # --- ALERTE AJOUTÉE POUR LA SAUVEGARDE ---
+        st.warning("⚠️ Attention : Pensez bien à télécharger le fichier Excel avant de fermer la page, sinon vos saisies seront définitivement perdues !")
+        
         st.download_button(
             label="📥 Télécharger le travail en Excel (Classeur complet)",
             data=donnees_excel,
@@ -127,7 +136,6 @@ if uploaded_files:
         if selection:
             cle_active = f"{fichier_selectionne}_{selection}"
             
-            # On charge le tableau depuis la mémoire, ou on le crée s'il n'a pas encore été ouvert
             if cle_active not in st.session_state['sauvegardes']:
                 csv_string = "\n".join(tables_dict[selection])
                 df_initial, cols_comm = preparer_tableau(csv_string)
@@ -148,20 +156,21 @@ if uploaded_files:
                 df_style = df.style.applymap(colorier_si_texte, subset=colonnes_commentaires)
             
             st.write(f"### {selection}")
-            st.info("💡 Vos saisies sont gardées en mémoire quand vous changez de luminaire. N'oubliez pas de télécharger le fichier Excel à la fin !")
             
-            # --- NOUVEAUTÉ : Rapport de largeur 1 pour 3 ---
-            config_colonnes = {}
+            # --- NOUVEAUTÉ : Configuration des largeurs ---
+            config_colonnes = {
+                # On force la largeur de notre index (la colonne Besoin fusionnée)
+                "Besoin": st.column_config.TextColumn(width=300)
+            }
+            
             for col in df.columns:
-                if col == "Besoin" or col.startswith("Proposition"):
+                if col.startswith("Proposition"):
                     config_colonnes[col] = st.column_config.TextColumn(width=300)
                 elif col in colonnes_commentaires:
                     config_colonnes[col] = st.column_config.TextColumn(width=100)
             
-            # Le tableau s'affiche et on capture immédiatement les modifications
             edited_df = st.data_editor(df_style, use_container_width=True, height=800, column_config=config_colonnes)
             
-            # Mise à jour de la mémoire avec ce qui vient d'être tapé
             st.session_state['sauvegardes'][cle_active] = edited_df
             
     else:
