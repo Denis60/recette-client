@@ -6,7 +6,8 @@ import re
 st.set_page_config(page_title="Recette Fonctionnelle", layout="wide")
 st.title("Validation des Recettes")
 
-uploaded_file = st.file_uploader("Chargez votre fichier CSV ici", type=['csv'])
+# --- NOUVEAUTÉ : Autorise le chargement de multiples fichiers ---
+uploaded_files = st.file_uploader("Chargez vos fichiers CSV ici", type=['csv'], accept_multiple_files=True)
 
 def process_csv(file):
     content = file.getvalue().decode("utf-8-sig", errors="replace")
@@ -42,12 +43,22 @@ def get_type_number(title):
         return int(match.group(1))
     return 9999
 
-if uploaded_file is not None:
-    tables_dict = process_csv(uploaded_file)
+# Si au moins un fichier est chargé
+if uploaded_files:
+    # --- NOUVEAUTÉ : Menu déroulant pour le choix du fichier ---
+    noms_fichiers = [f.name for f in uploaded_files]
+    fichier_selectionne = st.selectbox("1️⃣ Sélectionnez un fichier :", noms_fichiers)
+    
+    # On récupère le fichier correspondant au choix
+    fichier_actif = next(f for f in uploaded_files if f.name == fichier_selectionne)
+    
+    tables_dict = process_csv(fichier_actif)
     
     if tables_dict:
         noms_tableaux = sorted(list(tables_dict.keys()), key=get_type_number)
-        selection = st.selectbox("Sélectionnez un luminaire à recetter :", noms_tableaux)
+        
+        # Le menu des luminaires se met à jour en fonction du fichier choisi au-dessus
+        selection = st.selectbox("2️⃣ Sélectionnez un luminaire à recetter :", noms_tableaux)
         
         if selection:
             csv_string = "\n".join(tables_dict[selection])
@@ -70,37 +81,40 @@ if uploaded_file is not None:
                     is_prop_valide = col.startswith('Proposition') and valeur_catalogue != "" and valeur_catalogue.lower() != "nan"
                     
                     if is_besoin or is_prop_valide:
-                        nom_commentaire = f"💬 Notes {col}"
-                        df[nom_commentaire] = "" 
-                        nouvel_ordre.append(nom_commentaire)
-                        colonnes_commentaires.append(nom_commentaire)
+                        # --- NOUVEAUTÉ : Ajout de DEUX colonnes ---
+                        col_ekla = f"Eklalight ({col})"
+                        col_memo = f"Memorandum ({col})"
+                        
+                        df[col_ekla] = "" 
+                        df[col_memo] = "" 
+                        
+                        nouvel_ordre.extend([col_ekla, col_memo])
+                        colonnes_commentaires.extend([col_ekla, col_memo])
                 
                 df = df[nouvel_ordre]
+                
+                # Figeage UNIQUEMENT de la première colonne (sinon l'appli plante)
                 df = df.set_index(df.columns[0])
                 
-                # --- NOUVEAUTÉ : Coloration uniquement si la cellule contient du texte ---
                 def colorier_si_texte(val):
-                    # Si la cellule n'est pas vide, on la met en orange bien visible
                     if pd.notna(val) and str(val).strip() != "":
                         return 'background-color: #FFD580; color: black;'
-                    # Sinon, on laisse par défaut ou on met un très léger gris pour différencier la colonne
                     return 'background-color: #FAFAFA;'
                 
-                # Application de la couleur cellule par cellule
                 try:
                     df_style = df.style.map(colorier_si_texte, subset=colonnes_commentaires)
                 except AttributeError:
                     df_style = df.style.applymap(colorier_si_texte, subset=colonnes_commentaires)
                 
                 st.write(f"### {selection}")
-                st.info("💡 Double-cliquez pour ajouter vos commentaires. La cellule se coloriera une fois le texte validé (Touche Entrée).")
+                st.info("💡 Double-cliquez pour ajouter vos commentaires.")
                 
+                # On ajuste la largeur pour que les 2 colonnes ne prennent pas trop de place
                 config_colonnes = {col: st.column_config.TextColumn(width="small") for col in colonnes_commentaires}
                 
-                # --- NOUVEAUTÉ : Hauteur forcée (height=800) pour voir plus de lignes ---
                 st.data_editor(df_style, use_container_width=True, height=800, column_config=config_colonnes)
             
     else:
         st.warning("Aucun tableau au format <<Titre>> n'a été trouvé dans le fichier. Vérifiez votre CSV.")
 else:
-    st.info("En attente d'un fichier CSV...")
+    st.info("En attente d'un ou plusieurs fichiers CSV...")
