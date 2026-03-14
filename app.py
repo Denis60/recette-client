@@ -8,8 +8,11 @@ st.title("Validation des Recettes")
 uploaded_file = st.file_uploader("Chargez votre fichier CSV ici", type=['csv'])
 
 def process_csv(file):
-    # L'ajout de 'utf-8-sig' détruit le fameux caractère invisible d'Excel
     content = file.getvalue().decode("utf-8-sig", errors="replace")
+    
+    # --- NOUVEAUTÉ : Nettoyage des chaînes de caractères indésirables ---
+    content = content.replace("source: ", "").replace("value: ", "")
+    
     lines = content.split('\n')
     
     tables = {}
@@ -21,7 +24,6 @@ def process_csv(file):
         if not line:
             continue
             
-        # On rend la détection plus souple
         if "<<" in line and ">>" in line:
             if current_title and current_data:
                 tables[current_title] = current_data
@@ -48,8 +50,6 @@ if uploaded_file is not None:
             csv_string = "\n".join(tables_dict[selection])
             df = pd.read_csv(io.StringIO(csv_string), sep=";", index_col=False)
             
-            # J'AI RETIRÉ LA LIGNE QUI SUPPRIMAIT LES COLONNES VIDES !
-            
             if len(df.columns) >= 2:
                 colonnes = list(df.columns)
                 if 'Unnamed' in str(colonnes[0]) or colonnes[0] == '':
@@ -60,7 +60,12 @@ if uploaded_file is not None:
                 df = df.set_index([df.columns[0], df.columns[1]])
             
             st.write(f"### {selection}")
-            st.dataframe(df, use_container_width=True)
+            
+            # --- NOUVEAUTÉ : Remplacement de dataframe par data_editor ---
+            st.info("💡 Double-cliquez sur une cellule pour la modifier. Vous pouvez étirer les colonnes.")
+            
+            # st.data_editor rend tout le tableau modifiable par l'utilisateur
+            edited_df = st.data_editor(df, use_container_width=True)
             
     else:
         st.warning("Aucun tableau au format <<Titre>> n'a été trouvé dans le fichier. Vérifiez votre CSV.")
