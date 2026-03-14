@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
+import re  # Ajout de la librairie pour détecter les numéros
 
 st.set_page_config(page_title="Recette Fonctionnelle", layout="wide")
 st.title("Validation des Recettes")
@@ -10,7 +11,7 @@ uploaded_file = st.file_uploader("Chargez votre fichier CSV ici", type=['csv'])
 def process_csv(file):
     content = file.getvalue().decode("utf-8-sig", errors="replace")
     
-    # Nettoyages globaux demandés
+    # Nettoyages globaux
     content = content.replace("source: ", "").replace("value: ", "").replace("unit: ", "")
     
     lines = content.split('\n')
@@ -39,18 +40,27 @@ def process_csv(file):
         
     return tables
 
+# --- NOUVEAUTÉ : Fonction pour extraire le numéro et trier ---
+def get_type_number(title):
+    # Cherche le mot "Type" suivi d'un espace et d'un ou plusieurs chiffres
+    match = re.search(r'Type\s+(\d+)', title, re.IGNORECASE)
+    if match:
+        return int(match.group(1)) # Renvoie le chiffre trouvé
+    return 9999 # Si pas de chiffre, on met à la fin
+
 if uploaded_file is not None:
     tables_dict = process_csv(uploaded_file)
     
     if tables_dict:
-        noms_tableaux = list(tables_dict.keys())
+        # --- NOUVEAUTÉ : Tri de la liste avec notre fonction ---
+        noms_tableaux = sorted(list(tables_dict.keys()), key=get_type_number)
+        
         selection = st.selectbox("Sélectionnez un luminaire à recetter :", noms_tableaux)
         
         if selection:
             csv_string = "\n".join(tables_dict[selection])
             df = pd.read_csv(io.StringIO(csv_string), sep=";", index_col=False)
             
-            # Nettoyage de la chaîne "CCTP" si c'est la seule chose dans la cellule (ignorer les espaces)
             df = df.replace(r'^\s*CCTP\s*$', '', regex=True)
             
             if len(df.columns) >= 1:
@@ -59,48 +69,40 @@ if uploaded_file is not None:
                     colonnes[0] = "Caractéristique"
                 df.columns = colonnes
                 
-                # --- NOUVEAUTÉ : Création intelligente des colonnes de commentaires ---
-                nouvel_ordre = [df.columns[0]] # On garde "Caractéristique" en premier
+                nouvel_ordre = [df.columns[0]]
                 colonnes_commentaires = []
                 
                 for col in df.columns[1:]:
                     nouvel_ordre.append(col)
                     
-                    # On vérifie la ligne 0 (qui correspond à la ligne 'catalogue')
                     valeur_catalogue = str(df[col].iloc[0]).strip()
                     is_besoin = (col == 'Besoin')
-                    # Valide si ça commence par Proposition ET que le catalogue n'est pas vide
                     is_prop_valide = col.startswith('Proposition') and valeur_catalogue != "" and valeur_catalogue.lower() != "nan"
                     
                     if is_besoin or is_prop_valide:
                         nom_commentaire = f"💬 Notes {col}"
-                        df[nom_commentaire] = "" # On crée la colonne vide
+                        df[nom_commentaire] = "" 
                         nouvel_ordre.append(nom_commentaire)
                         colonnes_commentaires.append(nom_commentaire)
                 
-                # On applique ce nouvel ordre au tableau
                 df = df[nouvel_ordre]
-                
-                # On fige toujours la première colonne
                 df = df.set_index(df.columns[0])
                 
-                # --- NOUVEAUTÉ : Mise en couleur orange ---
-                def surligner_commentaires(val):
-                    return 'background-color: #FFE6CC' # Code couleur orange clair
+                # --- NOUVEAUTÉ : Méthode de coloration plus robuste ---
+                def bg_color(col):
+                    # Applique la couleur sur toute la colonne si elle fait partie des commentaires
+                    if col.name in colonnes_commentaires:
+                        return ['background-color: #FFE6CC'] * len(col)
+                    return [''] * len(col)
                 
-                # Compatibilité pour appliquer la couleur uniquement sur nos colonnes de notes
-                try:
-                    df_style = df.style.map(surligner_commentaires, subset=colonnes_commentaires)
-                except AttributeError:
-                    df_style = df.style.applymap(surligner_commentaires, subset=colonnes_commentaires)
+                # On utilise apply(..., axis=0) pour traiter colonne par colonne
+                df_style = df.style.apply(bg_color, axis=0)
                 
                 st.write(f"### {selection}")
                 st.info("💡 Double-cliquez sur les cellules orange pour ajouter vos commentaires.")
                 
-                # Rendre les colonnes de commentaires plus étroites par défaut
                 config_colonnes = {col: st.column_config.TextColumn(width="small") for col in colonnes_commentaires}
                 
-                # Affichage
                 st.data_editor(df_style, use_container_width=True, column_config=config_colonnes)
             
     else:
