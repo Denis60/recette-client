@@ -12,7 +12,6 @@ st.title("Validation des Recettes (Connecté)")
 # --- INITIALISATION SUPABASE ---
 @st.cache_resource
 def init_supabase() -> Client:
-    # On récupère les clés du coffre-fort de Streamlit
     url = st.secrets["SUPABASE_URL"]
     key = st.secrets["SUPABASE_KEY"]
     return create_client(url, key)
@@ -34,7 +33,6 @@ if not utilisateur:
 st.success(f"Connecté en tant que : **{utilisateur}**")
 st.markdown("---")
 
-# --- FONCTIONS DE TRAITEMENT (Identiques à la V1) ---
 def process_csv(file):
     content = file.getvalue().decode("utf-8-sig", errors="replace")
     content = content.replace("source: ", "").replace("value: ", "").replace("unit: ", "")
@@ -93,17 +91,16 @@ def preparer_tableau(csv_string):
                 nouvel_ordre.extend([col_ekla, col_memo])
                 colonnes_commentaires.extend([col_ekla, col_memo])
         df = df[nouvel_ordre]
+        df = df.set_index("Besoin")
     return df, colonnes_commentaires
 
 # --- GESTION DES FICHIERS ---
-# 1. On récupère la liste des fichiers déjà en base de données
 reponse_fichiers = supabase.table("tableaux_recette").select("nom_fichier").execute()
 fichiers_en_base = sorted(list(set([row["nom_fichier"] for row in reponse_fichiers.data])))
 
 st.markdown("### 📁 Chargement et Sélection")
 uploaded_files = st.file_uploader("Glissez un NOUVEAU fichier CSV ici pour l'ajouter à la base de données :", type=['csv'], accept_multiple_files=True)
 
-# Si on charge de nouveaux fichiers, on les enregistre dans Supabase s'ils n'y sont pas
 if uploaded_files:
     for file in uploaded_files:
         if file.name not in fichiers_en_base:
@@ -113,8 +110,8 @@ if uploaded_files:
                     csv_str = "\n".join(donnees_brutes)
                     df_initial, _ = preparer_tableau(csv_str)
                     
-                    # Convertir le tableau en JSON pour la base de données
-                    json_data = json.loads(df_initial.to_json(orient='split'))
+                    # CORRECTION : On s'assure que le format d'enregistrement est strict
+                    json_data = json.loads(df_initial.reset_index().to_json(orient='split'))
                     
                     id_unique = f"{file.name}_{nom_tab}"
                     supabase.table("tableaux_recette").insert({
@@ -124,20 +121,14 @@ if uploaded_files:
                         "donnees": json_data
                     }).execute()
             st.success(f"{file.name} importé avec succès !")
-            # On rafraîchit la page pour inclure le nouveau fichier dans la liste déroulante
             st.rerun()
 
-# --- MENU DÉROULANT DES FICHIERS ---
 if len(fichiers_en_base) > 0:
     fichier_selectionne = st.selectbox("1️⃣ Sélectionnez un fichier à recetter :", fichiers_en_base)
     
-    # Bouton de téléchargement Excel global
-    # (On télécharge les données de la base, pas besoin de tout mémoriser en session !)
     reponse_excel = supabase.table("tableaux_recette").select("nom_tableau, donnees").eq("nom_fichier", fichier_selectionne).execute()
-    
     output_excel = io.BytesIO()
     with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-        # Tri des tableaux pour l'Excel
         tableaux_tries = sorted(reponse_excel.data, key=lambda x: get_type_number(x["nom_tableau"]))
         for row in tableaux_tries:
             df_export = pd.read_json(io.StringIO(json.dumps(row["donnees"])), orient='split')
@@ -153,7 +144,6 @@ if len(fichiers_en_base) > 0:
     )
     st.markdown("---")
     
-    # --- SÉLECTION DU TABLEAU ---
     reponse_tableaux = supabase.table("tableaux_recette").select("*").eq("nom_fichier", fichier_selectionne).execute()
     tableaux_tries = sorted(reponse_tableaux.data, key=lambda x: get_type_number(x["nom_tableau"]))
     noms_tableaux = [row["nom_tableau"] for row in tableaux_tries]
@@ -161,23 +151,18 @@ if len(fichiers_en_base) > 0:
     selection = st.selectbox("2️⃣ Sélectionnez un luminaire :", noms_tableaux)
     
     if selection:
-        # On récupère la ligne exacte dans la base de données
         ligne_bdd = next(row for row in tableaux_tries if row["nom_tableau"] == selection)
         id_ligne = ligne_bdd["id"]
         
-        # --- GESTION DU VERROU ---
         est_verrouille = False
         if ligne_bdd["verrou_user"] and ligne_bdd["verrou_user"] != utilisateur:
             date_verrou = datetime.fromisoformat(ligne_bdd["verrou_date"])
-            # Si le verrou a moins de 30 minutes, on bloque
             if datetime.now() - date_verrou < timedelta(minutes=30):
                 est_verrouille = True
                 
         if est_verrouille:
             st.error(f"🔒 **ATTENTION** : Ce tableau est actuellement en cours d'édition par **{ligne_bdd['verrou_user']}**.")
-            st.warning("Veuillez patienter qu'il/elle termine, ou choisissez un autre luminaire.")
         else:
-            # On pose le verrou pour nous !
             supabase.table("tableaux_recette").update({
                 "verrou_user": utilisateur,
                 "verrou_date": datetime.now().isoformat()
@@ -192,9 +177,16 @@ if len(fichiers_en_base) > 0:
                 }).eq("id", id_ligne).execute()
                 st.rerun()
 
-            # --- AFFICHAGE ET ÉDITION ---
+            # --- CORRECTION DE LA LECTURE ---
             df = pd.read_json(io.StringIO(json.dumps(ligne_bdd["donnees"])), orient='split')
-            df = df.set_index(df.columns[0]) # On fige le "Besoin"
+            
+            # Rétablissement sûr de l'index figé
+            if 'Besoin' not in df.columns and df.index.name == 'Besoin':
+                df = df.reset_index()
+            if 'Besoin' in df.columns:
+                df = df.set_index('Besoin')
+            else:
+                df = df.set_index(df.columns[0])
             
             colonnes_commentaires = [col for col in df.columns if col.startswith("Eklalight") or col.startswith("Memorandum")]
             
@@ -215,16 +207,27 @@ if len(fichiers_en_base) > 0:
                 elif col in colonnes_commentaires:
                     config_colonnes[col] = st.column_config.TextColumn(width=100)
             
-            edited_df = st.data_editor(df_style, use_container_width=True, height=800, column_config=config_colonnes)
+            # --- CORRECTION : Ajout de la clé unique (key) au tableau ---
+            edited_df = st.data_editor(
+                df_style, 
+                use_container_width=True, 
+                height=800, 
+                column_config=config_colonnes,
+                key=f"editeur_{id_ligne}"  # C'est ceci qui empêche le tableau de clignoter !
+            )
             
-            # --- SAUVEGARDE AUTOMATIQUE EN BASE ---
-            # Si le tableau a été modifié à l'écran, on envoie le nouveau à Supabase
-            if not edited_df.reset_index().equals(df.reset_index()):
+            # --- CORRECTION : Comparaison et sauvegarde ultra-sécurisées ---
+            df_str = df.reset_index().fillna("").astype(str)
+            edited_str = edited_df.reset_index().fillna("").astype(str)
+            
+            if not df_str.equals(edited_str):
                 json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
                 supabase.table("tableaux_recette").update({
                     "donnees": json_data,
-                    "verrou_date": datetime.now().isoformat() # On rafraîchit le temps du verrou
+                    "verrou_date": datetime.now().isoformat()
                 }).eq("id", id_ligne).execute()
-                # Pas besoin de message, Streamlit recharge discrètement !
+                
+                # On force la page à se recharger pour s'aligner sur la base de données
+                st.rerun()
 else:
     st.info("La base de données est vide. Veuillez glisser votre premier fichier CSV ci-dessus.")
