@@ -6,7 +6,6 @@ import re
 st.set_page_config(page_title="Recette Fonctionnelle", layout="wide")
 st.title("Validation des Recettes")
 
-# --- NOUVEAUTÉ : Autorise le chargement de multiples fichiers ---
 uploaded_files = st.file_uploader("Chargez vos fichiers CSV ici", type=['csv'], accept_multiple_files=True)
 
 def process_csv(file):
@@ -43,13 +42,10 @@ def get_type_number(title):
         return int(match.group(1))
     return 9999
 
-# Si au moins un fichier est chargé
 if uploaded_files:
-    # --- NOUVEAUTÉ : Menu déroulant pour le choix du fichier ---
     noms_fichiers = [f.name for f in uploaded_files]
     fichier_selectionne = st.selectbox("1️⃣ Sélectionnez un fichier :", noms_fichiers)
     
-    # On récupère le fichier correspondant au choix
     fichier_actif = next(f for f in uploaded_files if f.name == fichier_selectionne)
     
     tables_dict = process_csv(fichier_actif)
@@ -57,7 +53,6 @@ if uploaded_files:
     if tables_dict:
         noms_tableaux = sorted(list(tables_dict.keys()), key=get_type_number)
         
-        # Le menu des luminaires se met à jour en fonction du fichier choisi au-dessus
         selection = st.selectbox("2️⃣ Sélectionnez un luminaire à recetter :", noms_tableaux)
         
         if selection:
@@ -81,7 +76,6 @@ if uploaded_files:
                     is_prop_valide = col.startswith('Proposition') and valeur_catalogue != "" and valeur_catalogue.lower() != "nan"
                     
                     if is_besoin or is_prop_valide:
-                        # --- NOUVEAUTÉ : Ajout de DEUX colonnes ---
                         col_ekla = f"Eklalight ({col})"
                         col_memo = f"Memorandum ({col})"
                         
@@ -92,8 +86,6 @@ if uploaded_files:
                         colonnes_commentaires.extend([col_ekla, col_memo])
                 
                 df = df[nouvel_ordre]
-                
-                # Figeage UNIQUEMENT de la première colonne (sinon l'appli plante)
                 df = df.set_index(df.columns[0])
                 
                 def colorier_si_texte(val):
@@ -107,11 +99,20 @@ if uploaded_files:
                     df_style = df.style.applymap(colorier_si_texte, subset=colonnes_commentaires)
                 
                 st.write(f"### {selection}")
-                st.info("💡 Double-cliquez pour ajouter vos commentaires.")
+                st.info("💡 Double-cliquez pour ajouter vos commentaires. Les cellules modifiées se coloreront.")
                 
-                # On ajuste la largeur pour que les 2 colonnes ne prennent pas trop de place
-                config_colonnes = {col: st.column_config.TextColumn(width="small") for col in colonnes_commentaires}
+                # --- NOUVEAUTÉ : Configuration des largeurs ---
+                config_colonnes = {}
                 
+                for col in df.columns:
+                    # On élargit fortement "Besoin" et "Proposition"
+                    if col == "Besoin" or col.startswith("Proposition"):
+                        config_colonnes[col] = st.column_config.TextColumn(width=400)
+                    # On fixe une largeur normale pour les colonnes de commentaires
+                    elif col in colonnes_commentaires:
+                        config_colonnes[col] = st.column_config.TextColumn(width=200)
+
+                # Affichage du tableau
                 st.data_editor(df_style, use_container_width=True, height=800, column_config=config_colonnes)
             
     else:
