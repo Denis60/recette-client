@@ -58,6 +58,10 @@ if uploaded_files:
         if selection:
             csv_string = "\n".join(tables_dict[selection])
             df = pd.read_csv(io.StringIO(csv_string), sep=";", index_col=False)
+            
+            # --- CORRECTION ICI : On force tout en texte et on nettoie les cases vides ---
+            df = df.fillna("")
+            df = df.astype(str)
             df = df.replace(r'^\s*CCTP\s*$', '', regex=True)
             
             if len(df.columns) >= 1:
@@ -89,7 +93,8 @@ if uploaded_files:
                 df = df.set_index(df.columns[0])
                 
                 def colorier_si_texte(val):
-                    if pd.notna(val) and str(val).strip() != "":
+                    # Puisque tout est du texte, la vérification est plus simple
+                    if str(val).strip() != "":
                         return 'background-color: #FFD580; color: black;'
                     return 'background-color: #FAFAFA;'
                 
@@ -101,18 +106,14 @@ if uploaded_files:
                 st.write(f"### {selection}")
                 st.info("💡 Double-cliquez pour ajouter vos commentaires. Les cellules modifiées se coloreront.")
                 
-                # --- NOUVEAUTÉ : Configuration des largeurs ---
                 config_colonnes = {}
                 
                 for col in df.columns:
-                    # On élargit fortement "Besoin" et "Proposition"
                     if col == "Besoin" or col.startswith("Proposition"):
                         config_colonnes[col] = st.column_config.TextColumn(width=400)
-                    # On fixe une largeur normale pour les colonnes de commentaires
                     elif col in colonnes_commentaires:
                         config_colonnes[col] = st.column_config.TextColumn(width=200)
 
-                # Affichage du tableau
                 st.data_editor(df_style, use_container_width=True, height=800, column_config=config_colonnes)
             
     else:
