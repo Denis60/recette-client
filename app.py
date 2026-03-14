@@ -10,8 +10,8 @@ uploaded_file = st.file_uploader("Chargez votre fichier CSV ici", type=['csv'])
 def process_csv(file):
     content = file.getvalue().decode("utf-8-sig", errors="replace")
     
-    # Nettoyage des chaînes de caractères indésirables
-    content = content.replace("source: ", "").replace("value: ", "")
+    # Nettoyages globaux demandés
+    content = content.replace("source: ", "").replace("value: ", "").replace("unit: ", "")
     
     lines = content.split('\n')
     
@@ -50,21 +50,58 @@ if uploaded_file is not None:
             csv_string = "\n".join(tables_dict[selection])
             df = pd.read_csv(io.StringIO(csv_string), sep=";", index_col=False)
             
+            # Nettoyage de la chaîne "CCTP" si c'est la seule chose dans la cellule (ignorer les espaces)
+            df = df.replace(r'^\s*CCTP\s*$', '', regex=True)
+            
             if len(df.columns) >= 1:
                 colonnes = list(df.columns)
                 if 'Unnamed' in str(colonnes[0]) or colonnes[0] == '':
                     colonnes[0] = "Caractéristique"
                 df.columns = colonnes
                 
-                # CORRECTION ICI : On ne fige QUE la première colonne
+                # --- NOUVEAUTÉ : Création intelligente des colonnes de commentaires ---
+                nouvel_ordre = [df.columns[0]] # On garde "Caractéristique" en premier
+                colonnes_commentaires = []
+                
+                for col in df.columns[1:]:
+                    nouvel_ordre.append(col)
+                    
+                    # On vérifie la ligne 0 (qui correspond à la ligne 'catalogue')
+                    valeur_catalogue = str(df[col].iloc[0]).strip()
+                    is_besoin = (col == 'Besoin')
+                    # Valide si ça commence par Proposition ET que le catalogue n'est pas vide
+                    is_prop_valide = col.startswith('Proposition') and valeur_catalogue != "" and valeur_catalogue.lower() != "nan"
+                    
+                    if is_besoin or is_prop_valide:
+                        nom_commentaire = f"💬 Notes {col}"
+                        df[nom_commentaire] = "" # On crée la colonne vide
+                        nouvel_ordre.append(nom_commentaire)
+                        colonnes_commentaires.append(nom_commentaire)
+                
+                # On applique ce nouvel ordre au tableau
+                df = df[nouvel_ordre]
+                
+                # On fige toujours la première colonne
                 df = df.set_index(df.columns[0])
-            
-            st.write(f"### {selection}")
-            
-            st.info("💡 Double-cliquez sur une cellule pour la modifier. Vous pouvez étirer les colonnes.")
-            
-            # Affichage du tableau éditable
-            edited_df = st.data_editor(df, use_container_width=True)
+                
+                # --- NOUVEAUTÉ : Mise en couleur orange ---
+                def surligner_commentaires(val):
+                    return 'background-color: #FFE6CC' # Code couleur orange clair
+                
+                # Compatibilité pour appliquer la couleur uniquement sur nos colonnes de notes
+                try:
+                    df_style = df.style.map(surligner_commentaires, subset=colonnes_commentaires)
+                except AttributeError:
+                    df_style = df.style.applymap(surligner_commentaires, subset=colonnes_commentaires)
+                
+                st.write(f"### {selection}")
+                st.info("💡 Double-cliquez sur les cellules orange pour ajouter vos commentaires.")
+                
+                # Rendre les colonnes de commentaires plus étroites par défaut
+                config_colonnes = {col: st.column_config.TextColumn(width="small") for col in colonnes_commentaires}
+                
+                # Affichage
+                st.data_editor(df_style, use_container_width=True, column_config=config_colonnes)
             
     else:
         st.warning("Aucun tableau au format <<Titre>> n'a été trouvé dans le fichier. Vérifiez votre CSV.")
