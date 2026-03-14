@@ -2,29 +2,49 @@ import streamlit as st
 import pandas as pd
 import io
 import re
+import json
+from datetime import datetime, timedelta
+from supabase import create_client, Client
 
-st.set_page_config(page_title="Recette Fonctionnelle", layout="wide")
-st.title("Validation des Recettes")
+st.set_page_config(page_title="Recette Fonctionnelle V2", layout="wide")
+st.title("Validation des Recettes (Connecté)")
 
-if 'sauvegardes' not in st.session_state:
-    st.session_state['sauvegardes'] = {}
+# --- INITIALISATION SUPABASE ---
+@st.cache_resource
+def init_supabase() -> Client:
+    # On récupère les clés du coffre-fort de Streamlit
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
 
-uploaded_files = st.file_uploader("Chargez vos fichiers CSV ici", type=['csv'], accept_multiple_files=True)
+try:
+    supabase = init_supabase()
+except Exception as e:
+    st.error("Impossible de se connecter à la base de données. Vérifiez vos clés dans Streamlit Secrets.")
+    st.stop()
 
+# --- IDENTIFICATION ---
+st.markdown("### 👤 Identification")
+utilisateur = st.text_input("Veuillez entrer votre prénom ou pseudo pour éditer les tableaux :")
+
+if not utilisateur:
+    st.warning("⚠️ L'identification est obligatoire pour ne pas se marcher sur les pieds avec les autres collaborateurs.")
+    st.stop()
+
+st.success(f"Connecté en tant que : **{utilisateur}**")
+st.markdown("---")
+
+# --- FONCTIONS DE TRAITEMENT (Identiques à la V1) ---
 def process_csv(file):
     content = file.getvalue().decode("utf-8-sig", errors="replace")
     content = content.replace("source: ", "").replace("value: ", "").replace("unit: ", "")
     lines = content.split('\n')
-    
     tables = {}
     current_title = None
     current_data = []
-    
     for line in lines:
         line = line.strip()
-        if not line:
-            continue
-            
+        if not line: continue
         if "<<" in line and ">>" in line:
             if current_title and current_data:
                 tables[current_title] = current_data
@@ -33,16 +53,13 @@ def process_csv(file):
         else:
             if current_title is not None:
                 current_data.append(line)
-                
     if current_title and current_data:
         tables[current_title] = current_data
-        
     return tables
 
 def get_type_number(title):
     match = re.search(r'Type\s+(\d+)', title, re.IGNORECASE)
-    if match:
-        return int(match.group(1))
+    if match: return int(match.group(1))
     return 9999
 
 def preparer_tableau(csv_string):
@@ -50,20 +67,14 @@ def preparer_tableau(csv_string):
     df = df.fillna("")
     df = df.astype(str)
     df = df.replace(r'^\s*CCTP\s*$', '', regex=True)
-    
     colonnes_commentaires = []
+    
     if len(df.columns) >= 2:
         col_0 = df.columns[0]
         col_1 = df.columns[1]
-        
-        # --- NOUVEAUTÉ : Fusion des deux premières colonnes ---
-        # On fusionne le texte avec un espace entre les deux
         df[col_1] = df[col_0].str.strip() + " " + df[col_1].str.strip()
-        # On supprime l'ancienne première colonne
         df = df.drop(columns=[col_0])
-        # On renomme la colonne fusionnée "Besoin"
         df.rename(columns={col_1: "Besoin"}, inplace=True)
-        
         nouvel_ordre = ["Besoin"]
         
         for col in df.columns:
@@ -72,81 +83,123 @@ def preparer_tableau(csv_string):
                 valeur_catalogue = str(df[col].iloc[0]).strip()
             else:
                 valeur_catalogue = ""
-                
             is_besoin = (col == 'Besoin')
             is_prop_valide = col.startswith('Proposition') and valeur_catalogue != "" and valeur_catalogue.lower() != "nan"
-            
             if is_besoin or is_prop_valide:
                 col_ekla = f"Eklalight ({col})"
                 col_memo = f"Memorandum ({col})"
-                
                 if col_ekla not in df.columns: df[col_ekla] = "" 
                 if col_memo not in df.columns: df[col_memo] = "" 
-                
                 nouvel_ordre.extend([col_ekla, col_memo])
                 colonnes_commentaires.extend([col_ekla, col_memo])
-        
         df = df[nouvel_ordre]
-        
-        # La colonne fusionnée "Besoin" devient notre colonne figée
-        df = df.set_index("Besoin")
-        
     return df, colonnes_commentaires
 
+# --- GESTION DES FICHIERS ---
+# 1. On récupère la liste des fichiers déjà en base de données
+reponse_fichiers = supabase.table("tableaux_recette").select("nom_fichier").execute()
+fichiers_en_base = sorted(list(set([row["nom_fichier"] for row in reponse_fichiers.data])))
+
+st.markdown("### 📁 Chargement et Sélection")
+uploaded_files = st.file_uploader("Glissez un NOUVEAU fichier CSV ici pour l'ajouter à la base de données :", type=['csv'], accept_multiple_files=True)
+
+# Si on charge de nouveaux fichiers, on les enregistre dans Supabase s'ils n'y sont pas
 if uploaded_files:
-    noms_fichiers = [f.name for f in uploaded_files]
-    fichier_selectionne = st.selectbox("1️⃣ Sélectionnez un fichier :", noms_fichiers)
+    for file in uploaded_files:
+        if file.name not in fichiers_en_base:
+            with st.spinner(f"Installation de {file.name} dans la base de données..."):
+                tables_dict = process_csv(file)
+                for nom_tab, donnees_brutes in tables_dict.items():
+                    csv_str = "\n".join(donnees_brutes)
+                    df_initial, _ = preparer_tableau(csv_str)
+                    
+                    # Convertir le tableau en JSON pour la base de données
+                    json_data = json.loads(df_initial.to_json(orient='split'))
+                    
+                    id_unique = f"{file.name}_{nom_tab}"
+                    supabase.table("tableaux_recette").insert({
+                        "id": id_unique,
+                        "nom_fichier": file.name,
+                        "nom_tableau": nom_tab,
+                        "donnees": json_data
+                    }).execute()
+            st.success(f"{file.name} importé avec succès !")
+            # On rafraîchit la page pour inclure le nouveau fichier dans la liste déroulante
+            st.rerun()
+
+# --- MENU DÉROULANT DES FICHIERS ---
+if len(fichiers_en_base) > 0:
+    fichier_selectionne = st.selectbox("1️⃣ Sélectionnez un fichier à recetter :", fichiers_en_base)
     
-    fichier_actif = next(f for f in uploaded_files if f.name == fichier_selectionne)
-    tables_dict = process_csv(fichier_actif)
+    # Bouton de téléchargement Excel global
+    # (On télécharge les données de la base, pas besoin de tout mémoriser en session !)
+    reponse_excel = supabase.table("tableaux_recette").select("nom_tableau, donnees").eq("nom_fichier", fichier_selectionne).execute()
     
-    if tables_dict:
-        noms_tableaux = sorted(list(tables_dict.keys()), key=get_type_number)
-        
-        output_excel = io.BytesIO()
-        with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-            for nom_tab in noms_tableaux:
-                cle_sauvegarde = f"{fichier_selectionne}_{nom_tab}"
-                
-                if cle_sauvegarde in st.session_state['sauvegardes']:
-                    df_export = st.session_state['sauvegardes'][cle_sauvegarde]
-                else:
-                    csv_str = "\n".join(tables_dict[nom_tab])
-                    df_export, _ = preparer_tableau(csv_str)
-                
-                nom_onglet = str(nom_tab)[:31]
-                nom_onglet = re.sub(r'[\\*?:/\[\]]', '', nom_onglet)
-                df_export.to_excel(writer, sheet_name=nom_onglet)
-        
-        donnees_excel = output_excel.getvalue()
-        
-        # --- ALERTE AJOUTÉE POUR LA SAUVEGARDE ---
-        st.warning("⚠️ Attention : Pensez bien à télécharger le fichier Excel avant de fermer la page, sinon vos saisies seront définitivement perdues !")
-        
-        st.download_button(
-            label="📥 Télécharger le travail en Excel (Classeur complet)",
-            data=donnees_excel,
-            file_name=f"Recette_{fichier_selectionne.replace('.csv', '')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-        st.markdown("---")
-        
-        selection = st.selectbox("2️⃣ Sélectionnez un luminaire à recetter :", noms_tableaux)
-        
-        if selection:
-            cle_active = f"{fichier_selectionne}_{selection}"
+    output_excel = io.BytesIO()
+    with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
+        # Tri des tableaux pour l'Excel
+        tableaux_tries = sorted(reponse_excel.data, key=lambda x: get_type_number(x["nom_tableau"]))
+        for row in tableaux_tries:
+            df_export = pd.read_json(io.StringIO(json.dumps(row["donnees"])), orient='split')
+            nom_onglet = str(row["nom_tableau"])[:31]
+            nom_onglet = re.sub(r'[\\*?:/\[\]]', '', nom_onglet)
+            df_export.to_excel(writer, sheet_name=nom_onglet, index=False)
             
-            if cle_active not in st.session_state['sauvegardes']:
-                csv_string = "\n".join(tables_dict[selection])
-                df_initial, cols_comm = preparer_tableau(csv_string)
-                st.session_state['sauvegardes'][cle_active] = df_initial
-                st.session_state[f"cols_{cle_active}"] = cols_comm
+    st.download_button(
+        label="📥 Télécharger tout ce fichier en Excel",
+        data=output_excel.getvalue(),
+        file_name=f"Recette_{fichier_selectionne.replace('.csv', '')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    st.markdown("---")
+    
+    # --- SÉLECTION DU TABLEAU ---
+    reponse_tableaux = supabase.table("tableaux_recette").select("*").eq("nom_fichier", fichier_selectionne).execute()
+    tableaux_tries = sorted(reponse_tableaux.data, key=lambda x: get_type_number(x["nom_tableau"]))
+    noms_tableaux = [row["nom_tableau"] for row in tableaux_tries]
+    
+    selection = st.selectbox("2️⃣ Sélectionnez un luminaire :", noms_tableaux)
+    
+    if selection:
+        # On récupère la ligne exacte dans la base de données
+        ligne_bdd = next(row for row in tableaux_tries if row["nom_tableau"] == selection)
+        id_ligne = ligne_bdd["id"]
+        
+        # --- GESTION DU VERROU ---
+        est_verrouille = False
+        if ligne_bdd["verrou_user"] and ligne_bdd["verrou_user"] != utilisateur:
+            date_verrou = datetime.fromisoformat(ligne_bdd["verrou_date"])
+            # Si le verrou a moins de 30 minutes, on bloque
+            if datetime.now() - date_verrou < timedelta(minutes=30):
+                est_verrouille = True
+                
+        if est_verrouille:
+            st.error(f"🔒 **ATTENTION** : Ce tableau est actuellement en cours d'édition par **{ligne_bdd['verrou_user']}**.")
+            st.warning("Veuillez patienter qu'il/elle termine, ou choisissez un autre luminaire.")
+        else:
+            # On pose le verrou pour nous !
+            supabase.table("tableaux_recette").update({
+                "verrou_user": utilisateur,
+                "verrou_date": datetime.now().isoformat()
+            }).eq("id", id_ligne).execute()
             
-            df = st.session_state['sauvegardes'][cle_active]
-            colonnes_commentaires = st.session_state[f"cols_{cle_active}"]
+            st.success(f"🔓 Tableau verrouillé à votre nom. Vous seul pouvez le modifier.")
+            
+            if st.button("J'ai terminé avec ce tableau (Libérer le verrou)"):
+                supabase.table("tableaux_recette").update({
+                    "verrou_user": None,
+                    "verrou_date": None
+                }).eq("id", id_ligne).execute()
+                st.rerun()
+
+            # --- AFFICHAGE ET ÉDITION ---
+            df = pd.read_json(io.StringIO(json.dumps(ligne_bdd["donnees"])), orient='split')
+            df = df.set_index(df.columns[0]) # On fige le "Besoin"
+            
+            colonnes_commentaires = [col for col in df.columns if col.startswith("Eklalight") or col.startswith("Memorandum")]
             
             def colorier_si_texte(val):
-                if str(val).strip() != "":
+                if str(val).strip() != "" and str(val).lower() != "nan":
                     return 'background-color: #FFD580; color: black;'
                 return 'background-color: #FAFAFA;'
             
@@ -155,14 +208,7 @@ if uploaded_files:
             except AttributeError:
                 df_style = df.style.applymap(colorier_si_texte, subset=colonnes_commentaires)
             
-            st.write(f"### {selection}")
-            
-            # --- NOUVEAUTÉ : Configuration des largeurs ---
-            config_colonnes = {
-                # On force la largeur de notre index (la colonne Besoin fusionnée)
-                "Besoin": st.column_config.TextColumn(width=300)
-            }
-            
+            config_colonnes = {"Besoin": st.column_config.TextColumn(width=300)}
             for col in df.columns:
                 if col.startswith("Proposition"):
                     config_colonnes[col] = st.column_config.TextColumn(width=300)
@@ -171,9 +217,14 @@ if uploaded_files:
             
             edited_df = st.data_editor(df_style, use_container_width=True, height=800, column_config=config_colonnes)
             
-            st.session_state['sauvegardes'][cle_active] = edited_df
-            
-    else:
-        st.warning("Aucun tableau au format <<Titre>> n'a été trouvé dans le fichier.")
+            # --- SAUVEGARDE AUTOMATIQUE EN BASE ---
+            # Si le tableau a été modifié à l'écran, on envoie le nouveau à Supabase
+            if not edited_df.reset_index().equals(df.reset_index()):
+                json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
+                supabase.table("tableaux_recette").update({
+                    "donnees": json_data,
+                    "verrou_date": datetime.now().isoformat() # On rafraîchit le temps du verrou
+                }).eq("id", id_ligne).execute()
+                # Pas besoin de message, Streamlit recharge discrètement !
 else:
-    st.info("En attente d'un ou plusieurs fichiers CSV...")
+    st.info("La base de données est vide. Veuillez glisser votre premier fichier CSV ci-dessus.")
