@@ -157,7 +157,7 @@ if len(fichiers_en_base) > 0:
         est_verrouille = False
         if ligne_bdd["verrou_user"] and ligne_bdd["verrou_user"] != utilisateur:
             date_verrou = datetime.fromisoformat(ligne_bdd["verrou_date"])
-            if datetime.now() - date_verrou < timedelta(minutes=30):
+            if datetime.now(timezone.utc) - date_verrou < timedelta(minutes=30):
                 est_verrouille = True
                 
         if est_verrouille:
@@ -165,7 +165,7 @@ if len(fichiers_en_base) > 0:
         else:
             supabase.table("tableaux_recette").update({
                 "verrou_user": utilisateur,
-                "verrou_date": datetime.now().isoformat()
+                "verrou_date": datetime.now(timezone.utc).isoformat()
             }).eq("id", id_ligne).execute()
             
             st.success(f"🔓 Tableau verrouillé à votre nom. Vous seul pouvez le modifier.")
@@ -224,7 +224,7 @@ if len(fichiers_en_base) > 0:
                 json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
                 supabase.table("tableaux_recette").update({
                     "donnees": json_data,
-                    "verrou_date": datetime.now().isoformat()
+                    "verrou_date": datetime.now(timezone.utc).isoformat()
                 }).eq("id", id_ligne).execute()
                 
                 # On force la page à se recharger pour s'aligner sur la base de données
