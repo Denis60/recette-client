@@ -110,7 +110,6 @@ if uploaded_files:
                     csv_str = "\n".join(donnees_brutes)
                     df_initial, _ = preparer_tableau(csv_str)
                     
-                    # CORRECTION : On s'assure que le format d'enregistrement est strict
                     json_data = json.loads(df_initial.reset_index().to_json(orient='split'))
                     
                     id_unique = f"{file.name}_{nom_tab}"
@@ -162,6 +161,7 @@ if len(fichiers_en_base) > 0:
                 
         if est_verrouille:
             st.error(f"🔒 **ATTENTION** : Ce tableau est actuellement en cours d'édition par **{ligne_bdd['verrou_user']}**.")
+            st.warning("Veuillez patienter qu'il/elle termine, ou choisissez un autre luminaire.")
         else:
             supabase.table("tableaux_recette").update({
                 "verrou_user": utilisateur,
@@ -169,18 +169,10 @@ if len(fichiers_en_base) > 0:
             }).eq("id", id_ligne).execute()
             
             st.success(f"🔓 Tableau verrouillé à votre nom. Vous seul pouvez le modifier.")
-            
-            if st.button("J'ai terminé avec ce tableau (Libérer le verrou)"):
-                supabase.table("tableaux_recette").update({
-                    "verrou_user": None,
-                    "verrou_date": None
-                }).eq("id", id_ligne).execute()
-                st.rerun()
+            st.warning("⚠️ Tapez autant de texte que vous voulez. **N'oubliez pas de cliquer sur le bouton bleu 'Enregistrer' tout en bas** avant de changer de luminaire !")
 
-            # --- CORRECTION DE LA LECTURE ---
             df = pd.read_json(io.StringIO(json.dumps(ligne_bdd["donnees"])), orient='split')
             
-            # Rétablissement sûr de l'index figé
             if 'Besoin' not in df.columns and df.index.name == 'Besoin':
                 df = df.reset_index()
             if 'Besoin' in df.columns:
@@ -207,27 +199,40 @@ if len(fichiers_en_base) > 0:
                 elif col in colonnes_commentaires:
                     config_colonnes[col] = st.column_config.TextColumn(width=100)
             
-            # --- CORRECTION : Ajout de la clé unique (key) au tableau ---
+            # --- MODIFICATION DE LA HAUTEUR ICI (670 pixels = ~18 lignes + en-tête) ---
             edited_df = st.data_editor(
                 df_style, 
                 use_container_width=True, 
-                height=800, 
+                height=670, 
                 column_config=config_colonnes,
-                key=f"editeur_{id_ligne}"  # C'est ceci qui empêche le tableau de clignoter !
+                key=f"editeur_{id_ligne}"
             )
             
-            # --- CORRECTION : Comparaison et sauvegarde ultra-sécurisées ---
+            st.markdown("<br>", unsafe_allow_html=True)
+            col1, col2 = st.columns(2)
+            
             df_str = df.reset_index().fillna("").astype(str)
             edited_str = edited_df.reset_index().fillna("").astype(str)
             
-            if not df_str.equals(edited_str):
-                json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
-                supabase.table("tableaux_recette").update({
-                    "donnees": json_data,
-                    "verrou_date": datetime.now(timezone.utc).isoformat()
-                }).eq("id", id_ligne).execute()
-                
-                # On force la page à se recharger pour s'aligner sur la base de données
-                st.rerun()
+            with col1:
+                if st.button("💾 Enregistrer mes modifications", type="primary", use_container_width=True):
+                    if not df_str.equals(edited_str):
+                        json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
+                        supabase.table("tableaux_recette").update({
+                            "donnees": json_data,
+                            "verrou_date": datetime.now(timezone.utc).isoformat()
+                        }).eq("id", id_ligne).execute()
+                        st.success("✅ Vos modifications ont été sauvegardées dans la base de données !")
+                    else:
+                        st.info("Aucune modification détectée.")
+                        
+            with col2:
+                if st.button("🔓 J'ai terminé (Libérer le verrou)", use_container_width=True):
+                    supabase.table("tableaux_recette").update({
+                        "verrou_user": None,
+                        "verrou_date": None
+                    }).eq("id", id_ligne).execute()
+                    st.rerun()
+
 else:
     st.info("La base de données est vide. Veuillez glisser votre premier fichier CSV ci-dessus.")
