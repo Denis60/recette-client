@@ -169,8 +169,6 @@ if len(fichiers_en_base) > 0:
             }).eq("id", id_ligne).execute()
             
             st.success(f"🔓 Tableau verrouillé à votre nom. Vous seul pouvez le modifier.")
-            st.warning("⚠️ Tapez autant de texte que vous voulez. **N'oubliez pas de cliquer sur le bouton bleu 'Enregistrer' tout en bas** avant de changer de luminaire !")
-
             df = pd.read_json(io.StringIO(json.dumps(ligne_bdd["donnees"])), orient='split')
             
             if 'Besoin' not in df.columns and df.index.name == 'Besoin':
