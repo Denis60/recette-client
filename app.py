@@ -148,11 +148,9 @@ if len(fichiers_en_base) > 0:
     tableaux_tries = sorted(reponse_tableaux.data, key=lambda x: get_type_number(x["nom_tableau"]))
     noms_tableaux = [row["nom_tableau"] for row in tableaux_tries]
     
-    # --- NOUVEAUTÉ : Ajout de la ligne par défaut ---
     OPTION_DEFAUT = "--- Choisir un luminaire ---"
     liste_choix = [OPTION_DEFAUT] + noms_tableaux
     
-    # Initiation de la mémoire pour la liste déroulante
     if "choix_luminaire" not in st.session_state:
         st.session_state.choix_luminaire = OPTION_DEFAUT
 
@@ -161,7 +159,6 @@ if len(fichiers_en_base) > 0:
     with col_gauche:
         selection = st.selectbox("2️⃣ Sélectionnez un luminaire :", liste_choix, key="choix_luminaire")
     
-    # Le tableau ne s'affiche QUE si on a choisi un vrai luminaire
     if selection and selection != OPTION_DEFAUT:
         ligne_bdd = next(row for row in tableaux_tries if row["nom_tableau"] == selection)
         id_ligne = ligne_bdd["id"]
@@ -190,10 +187,11 @@ if len(fichiers_en_base) > 0:
             }).eq("id", id_ligne).execute()
             
             with col_droite:
+                # --- NOUVEAUTÉ : Modification du message de verrouillage ---
                 st.markdown(
                     """
                     <div style='margin-top: 28px; background-color: #e6f4ea; color: #1e4620; padding: 0 12px; border-radius: 8px; height: 39px; display: flex; align-items: center; font-size: 15px;'>
-                        🔓 Verrouillé à votre nom
+                        🔓 Verrouillé à votre nom. Pensez à enregistrer.
                     </div>
                     """, 
                     unsafe_allow_html=True
@@ -235,24 +233,15 @@ if len(fichiers_en_base) > 0:
                 key=f"editeur_{id_ligne}"
             )
             
-            # --- NOUVEAUTÉ : Sauvegarde automatique transparente (plus de bouton manuel) ---
             df_str = df.reset_index().fillna("").astype(str)
             edited_str = edited_df.reset_index().fillna("").astype(str)
             
-            if not df_str.equals(edited_str):
-                json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
-                supabase.table("tableaux_recette").update({
-                    "donnees": json_data,
-                    "verrou_date": datetime.now(timezone.utc).isoformat()
-                }).eq("id", id_ligne).execute()
-                # Petite notification discrète de succès en bas à droite
-                st.toast("Sauvegardé !", icon="💾")
-            
             st.markdown("<br>", unsafe_allow_html=True)
-            col1, col2 = st.columns([2, 1])
             
-            with col1:
-                # --- NOUVEAUTÉ : Menu déroulant d'évaluation ---
+            # --- NOUVEAUTÉ : Disposition en 3 colonnes (ratio 2 pour la liste, 1 et 1 pour les boutons) ---
+            col_eval, col_save, col_quit = st.columns([2, 1, 1])
+            
+            with col_eval:
                 options_eval = [
                     "à évaluer", 
                     "OK", 
@@ -270,26 +259,46 @@ if len(fichiers_en_base) > 0:
                     key=f"eval_{id_ligne}"
                 )
                 
-                # Sauvegarde immédiate si on change l'évaluation
+                # La liste déroulante sauvegarde toujours immédiatement sa propre valeur
                 if nouvelle_eval != valeur_actuelle:
                     supabase.table("tableaux_recette").update({"evaluation": nouvelle_eval}).eq("id", id_ligne).execute()
                     st.toast("Évaluation mise à jour !", icon="✅")
                     st.rerun()
 
-            with col2:
-                # --- NOUVEAUTÉ : L'alignement du bouton terminer et déverrouillage propre ---
+            with col_save:
                 st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-                if st.button("🔓 J'ai terminé (Fermer ce tableau)", use_container_width=True):
-                    # 1. On libère le verrou en base de données
-                    supabase.table("tableaux_recette").update({
-                        "verrou_user": None,
-                        "verrou_date": None
-                    }).eq("id", id_ligne).execute()
+                # Bouton de sauvegarde MANUELLE
+                if st.button("💾 Enregistrer", type="primary", use_container_width=True):
+                    if not df_str.equals(edited_str):
+                        json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
+                        supabase.table("tableaux_recette").update({
+                            "donnees": json_data,
+                            "verrou_date": datetime.now(timezone.utc).isoformat()
+                        }).eq("id", id_ligne).execute()
+                        st.success("✅ Sauvegardé !")
+                    else:
+                        st.info("Aucune modification.")
+
+            with col_quit:
+                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                # Bouton de sortie avec sauvegarde INTÉGRÉE
+                if st.button("🔓 Quitter le tableau", use_container_width=True):
+                    # On vérifie s'il y a des choses à sauvegarder avant de fermer
+                    if not df_str.equals(edited_str):
+                        json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
+                        supabase.table("tableaux_recette").update({
+                            "donnees": json_data,
+                            "verrou_user": None,
+                            "verrou_date": None
+                        }).eq("id", id_ligne).execute()
+                    else:
+                        # Si rien n'a changé, on enlève juste le verrou
+                        supabase.table("tableaux_recette").update({
+                            "verrou_user": None,
+                            "verrou_date": None
+                        }).eq("id", id_ligne).execute()
                     
-                    # 2. On remet la liste déroulante sur "Choisir un luminaire"
                     st.session_state.choix_luminaire = OPTION_DEFAUT
-                    
-                    # 3. On rafraîchit la page pour tout faire disparaître
                     st.rerun()
 
 else:
