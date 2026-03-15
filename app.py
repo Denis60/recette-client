@@ -147,7 +147,11 @@ if len(fichiers_en_base) > 0:
     tableaux_tries = sorted(reponse_tableaux.data, key=lambda x: get_type_number(x["nom_tableau"]))
     noms_tableaux = [row["nom_tableau"] for row in tableaux_tries]
     
-    selection = st.selectbox("2️⃣ Sélectionnez un luminaire :", noms_tableaux)
+# On crée deux colonnes avec un ratio 2 (gauche) pour 1 (droite)
+    col_gauche, col_droite = st.columns([2, 1])
+    
+    with col_gauche:
+        selection = st.selectbox("2️⃣ Sélectionnez un luminaire :", noms_tableaux)
     
     if selection:
         ligne_bdd = next(row for row in tableaux_tries if row["nom_tableau"] == selection)
@@ -160,7 +164,9 @@ if len(fichiers_en_base) > 0:
                 est_verrouille = True
                 
         if est_verrouille:
-            st.error(f"🔒 **ATTENTION** : Ce tableau est actuellement en cours d'édition par **{ligne_bdd['verrou_user']}**.")
+            with col_droite:
+                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                st.error(f"🔒 En édition par {ligne_bdd['verrou_user']}.")
             st.warning("Veuillez patienter qu'il/elle termine, ou choisissez un autre luminaire.")
         else:
             supabase.table("tableaux_recette").update({
@@ -168,7 +174,10 @@ if len(fichiers_en_base) > 0:
                 "verrou_date": datetime.now(timezone.utc).isoformat()
             }).eq("id", id_ligne).execute()
             
-            st.success(f"🔓 Tableau verrouillé à votre nom. Vous seul pouvez le modifier.")
+            with col_droite:
+                # La marge invisible pour s'aligner parfaitement avec la case
+                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                st.success(f"🔓 Verrouillé à votre nom.")
             df = pd.read_json(io.StringIO(json.dumps(ligne_bdd["donnees"])), orient='split')
             
             if 'Besoin' not in df.columns and df.index.name == 'Besoin':
