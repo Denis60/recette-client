@@ -165,8 +165,14 @@ if len(fichiers_en_base) > 0:
                 
         if est_verrouille:
             with col_droite:
-                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-                st.error(f"🔒 En édition par {ligne_bdd['verrou_user']}.")
+                st.markdown(
+                    f"""
+                    <div style='margin-top: 28px; background-color: #fce8e6; color: #c5221f; padding: 0 12px; border-radius: 8px; height: 39px; display: flex; align-items: center; font-size: 15px;'>
+                        🔒 En édition par {ligne_bdd['verrou_user']}
+                    </div>
+                    """, 
+                    unsafe_allow_html=True
+                )
             st.warning("Veuillez patienter qu'il/elle termine, ou choisissez un autre luminaire.")
         else:
             supabase.table("tableaux_recette").update({
@@ -175,9 +181,14 @@ if len(fichiers_en_base) > 0:
             }).eq("id", id_ligne).execute()
             
             with col_droite:
-                # La marge invisible pour s'aligner parfaitement avec la case
-                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-                st.success(f"🔓 Verrouillé à votre nom.")
+                st.markdown(
+                    """
+                    <div style='margin-top: 28px; background-color: #e6f4ea; color: #1e4620; padding: 0 12px; border-radius: 8px; height: 39px; display: flex; align-items: center; font-size: 15px;'>
+                        🔓 Verrouillé à votre nom
+                    </div>
+                    """, 
+                    unsafe_allow_html=True
+                )
             df = pd.read_json(io.StringIO(json.dumps(ligne_bdd["donnees"])), orient='split')
             
             if 'Besoin' not in df.columns and df.index.name == 'Besoin':
