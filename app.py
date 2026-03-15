@@ -3,7 +3,7 @@ import pandas as pd
 import io
 import re
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
 
 st.set_page_config(page_title="Recette Fonctionnelle V2", layout="wide")
