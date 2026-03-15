@@ -154,6 +154,12 @@ if len(fichiers_en_base) > 0:
     if "choix_luminaire" not in st.session_state:
         st.session_state.choix_luminaire = OPTION_DEFAUT
 
+    # --- CORRECTION DU BUG DE REDIRECTION ---
+    # On vide la sélection proprement AVANT de dessiner la liste déroulante
+    if st.session_state.get("quitter_tableau", False):
+        st.session_state.choix_luminaire = OPTION_DEFAUT
+        st.session_state.quitter_tableau = False
+
     col_gauche, col_droite = st.columns([2, 1])
     
     with col_gauche:
@@ -187,7 +193,6 @@ if len(fichiers_en_base) > 0:
             }).eq("id", id_ligne).execute()
             
             with col_droite:
-                # --- NOUVEAUTÉ : Modification du message de verrouillage ---
                 st.markdown(
                     """
                     <div style='margin-top: 28px; background-color: #e6f4ea; color: #1e4620; padding: 0 12px; border-radius: 8px; height: 39px; display: flex; align-items: center; font-size: 15px;'>
@@ -237,8 +242,6 @@ if len(fichiers_en_base) > 0:
             edited_str = edited_df.reset_index().fillna("").astype(str)
             
             st.markdown("<br>", unsafe_allow_html=True)
-            
-            # --- NOUVEAUTÉ : Disposition en 3 colonnes (ratio 2 pour la liste, 1 et 1 pour les boutons) ---
             col_eval, col_save, col_quit = st.columns([2, 1, 1])
             
             with col_eval:
@@ -259,7 +262,6 @@ if len(fichiers_en_base) > 0:
                     key=f"eval_{id_ligne}"
                 )
                 
-                # La liste déroulante sauvegarde toujours immédiatement sa propre valeur
                 if nouvelle_eval != valeur_actuelle:
                     supabase.table("tableaux_recette").update({"evaluation": nouvelle_eval}).eq("id", id_ligne).execute()
                     st.toast("Évaluation mise à jour !", icon="✅")
@@ -267,7 +269,6 @@ if len(fichiers_en_base) > 0:
 
             with col_save:
                 st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-                # Bouton de sauvegarde MANUELLE
                 if st.button("💾 Enregistrer", type="primary", use_container_width=True):
                     if not df_str.equals(edited_str):
                         json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
@@ -281,9 +282,7 @@ if len(fichiers_en_base) > 0:
 
             with col_quit:
                 st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-                # Bouton de sortie avec sauvegarde INTÉGRÉE
                 if st.button("🔓 Quitter le tableau", use_container_width=True):
-                    # On vérifie s'il y a des choses à sauvegarder avant de fermer
                     if not df_str.equals(edited_str):
                         json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
                         supabase.table("tableaux_recette").update({
@@ -292,13 +291,13 @@ if len(fichiers_en_base) > 0:
                             "verrou_date": None
                         }).eq("id", id_ligne).execute()
                     else:
-                        # Si rien n'a changé, on enlève juste le verrou
                         supabase.table("tableaux_recette").update({
                             "verrou_user": None,
                             "verrou_date": None
                         }).eq("id", id_ligne).execute()
                     
-                    st.session_state.choix_luminaire = OPTION_DEFAUT
+                    # --- CORRECTION DU BUG DE REDIRECTION ---
+                    st.session_state.quitter_tableau = True
                     st.rerun()
 
 else:
