@@ -221,7 +221,7 @@ if len(fichiers_en_base) > 0:
             edited_df = st.data_editor(
                 df_style, 
                 use_container_width=True, 
-                height=550, 
+                height=500, 
                 column_config=config_colonnes,
                 key=f"editeur_{id_ligne}"
             )
