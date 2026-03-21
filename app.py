@@ -167,7 +167,6 @@ if len(fichiers_en_base) > 0:
     if "choix_luminaire" not in st.session_state:
         st.session_state.choix_luminaire = OPTION_DEFAUT
 
-    # --- CORRECTION DU BUG DE REDIRECTION ---
     if st.session_state.get("quitter_tableau", False):
         st.session_state.choix_luminaire = OPTION_DEFAUT
         st.session_state.quitter_tableau = False
@@ -253,7 +252,6 @@ if len(fichiers_en_base) > 0:
             df_str = df.reset_index().fillna("").astype(str)
             edited_str = edited_df.reset_index().fillna("").astype(str)
             
-            # --- CORRECTION : Réintégration de la sauvegarde automatique ---
             if not df_str.equals(edited_str):
                 json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
                 supabase.table("tableaux_recette").update({
@@ -262,6 +260,33 @@ if len(fichiers_en_base) > 0:
                 }).eq("id", id_ligne).execute()
                 st.toast("Sauvegardé automatiquement !", icon="💾")
             
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # --- NOUVEAUTÉ : Ajout de colonnes via un tiroir déroulant ---
+            with st.expander("➕ Ajouter une nouvelle colonne au tableau"):
+                col_new_name, col_add_btn = st.columns([3, 1])
+                with col_new_name:
+                    nouvelle_colonne = st.text_input("Nom de la colonne à ajouter :", key=f"new_col_{id_ligne}")
+                with col_add_btn:
+                    st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                    if st.button("Ajouter la colonne", use_container_width=True):
+                        if nouvelle_colonne:
+                            if nouvelle_colonne not in edited_df.columns:
+                                # On ajoute la colonne au tableau avec vos dernières frappes
+                                df_updated = edited_df.reset_index()
+                                df_updated[nouvelle_colonne] = "" 
+                                json_data = json.loads(df_updated.to_json(orient='split'))
+                                
+                                # On met à jour la base de données
+                                supabase.table("tableaux_recette").update({
+                                    "donnees": json_data,
+                                    "verrou_date": datetime.now(timezone.utc).isoformat()
+                                }).eq("id", id_ligne).execute()
+                                
+                                st.rerun() # Recharge la page pour afficher la nouvelle colonne
+                            else:
+                                st.warning("Cette colonne existe déjà !")
+
             st.markdown("<br>", unsafe_allow_html=True)
             col_eval, col_save, col_quit = st.columns([2, 1, 1])
             
@@ -291,7 +316,6 @@ if len(fichiers_en_base) > 0:
             with col_save:
                 st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
                 if st.button("💾 Enregistrer", type="primary", use_container_width=True):
-                    # Même si c'est automatique, on laisse ce bouton pour rassurer l'utilisateur
                     if not df_str.equals(edited_str):
                         json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
                         supabase.table("tableaux_recette").update({
