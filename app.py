@@ -136,12 +136,25 @@ if len(fichiers_en_base) > 0:
             nom_onglet = re.sub(r'[\\*?:/\[\]]', '', nom_onglet)
             df_export.to_excel(writer, sheet_name=nom_onglet, index=False)
             
-    st.download_button(
-        label="📥 Télécharger tout ce fichier en Excel",
-        data=output_excel.getvalue(),
-        file_name=f"Recette_{fichier_selectionne.replace('.csv', '')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    col_dl, col_del = st.columns(2)
+    
+    with col_dl:
+        st.download_button(
+            label="📥 Télécharger tout ce fichier en Excel",
+            data=output_excel.getvalue(),
+            file_name=f"Recette_{fichier_selectionne.replace('.csv', '')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+        
+    with col_del:
+        if st.button("🗑️ Supprimer définitivement ce fichier", use_container_width=True):
+            with st.spinner("Suppression en cours..."):
+                supabase.table("tableaux_recette").delete().eq("nom_fichier", fichier_selectionne).execute()
+                if "choix_luminaire" in st.session_state:
+                    del st.session_state["choix_luminaire"]
+                st.rerun()
+
     st.markdown("---")
     
     reponse_tableaux = supabase.table("tableaux_recette").select("*").eq("nom_fichier", fichier_selectionne).execute()
@@ -155,7 +168,6 @@ if len(fichiers_en_base) > 0:
         st.session_state.choix_luminaire = OPTION_DEFAUT
 
     # --- CORRECTION DU BUG DE REDIRECTION ---
-    # On vide la sélection proprement AVANT de dessiner la liste déroulante
     if st.session_state.get("quitter_tableau", False):
         st.session_state.choix_luminaire = OPTION_DEFAUT
         st.session_state.quitter_tableau = False
@@ -241,6 +253,15 @@ if len(fichiers_en_base) > 0:
             df_str = df.reset_index().fillna("").astype(str)
             edited_str = edited_df.reset_index().fillna("").astype(str)
             
+            # --- CORRECTION : Réintégration de la sauvegarde automatique ---
+            if not df_str.equals(edited_str):
+                json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
+                supabase.table("tableaux_recette").update({
+                    "donnees": json_data,
+                    "verrou_date": datetime.now(timezone.utc).isoformat()
+                }).eq("id", id_ligne).execute()
+                st.toast("Sauvegardé automatiquement !", icon="💾")
+            
             st.markdown("<br>", unsafe_allow_html=True)
             col_eval, col_save, col_quit = st.columns([2, 1, 1])
             
@@ -270,6 +291,7 @@ if len(fichiers_en_base) > 0:
             with col_save:
                 st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
                 if st.button("💾 Enregistrer", type="primary", use_container_width=True):
+                    # Même si c'est automatique, on laisse ce bouton pour rassurer l'utilisateur
                     if not df_str.equals(edited_str):
                         json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
                         supabase.table("tableaux_recette").update({
@@ -278,7 +300,7 @@ if len(fichiers_en_base) > 0:
                         }).eq("id", id_ligne).execute()
                         st.success("✅ Sauvegardé !")
                     else:
-                        st.info("Aucune modification.")
+                        st.info("Aucune modification par rapport au dernier enregistrement.")
 
             with col_quit:
                 st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
@@ -296,7 +318,6 @@ if len(fichiers_en_base) > 0:
                             "verrou_date": None
                         }).eq("id", id_ligne).execute()
                     
-                    # --- CORRECTION DU BUG DE REDIRECTION ---
                     st.session_state.quitter_tableau = True
                     st.rerun()
 
