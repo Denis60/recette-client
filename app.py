@@ -90,7 +90,6 @@ def preparer_tableau(csv_string):
     return df, colonnes_commentaires
 
 # --- GESTION DES FICHIERS ---
-# On lit les fichiers dispos
 reponse_fichiers = supabase.table("tableaux_recette").select("nom_fichier").execute()
 fichiers_en_base = sorted(list(set([row["nom_fichier"] for row in reponse_fichiers.data])))
 
@@ -115,7 +114,7 @@ if uploaded_files:
                         "nom_tableau": nom_tab,
                         "donnees": json_data,
                         "evaluation": "à évaluer",
-                        "commentaire": ""  # On initie le champ vide
+                        "commentaire": ""
                     }).execute()
             st.success(f"{file.name} importé avec succès !")
             st.rerun()
@@ -124,7 +123,6 @@ if len(fichiers_en_base) > 0:
     fichier_selectionne = st.selectbox("1️⃣ Sélectionnez un fichier à recetter :", fichiers_en_base)
     st.markdown("---")
     
-    # On récupère les tableaux SANS forcer le tri (Garde l'ordre d'insertion/CSV)
     reponse_tableaux = supabase.table("tableaux_recette").select("*").eq("nom_fichier", fichier_selectionne).execute()
     tableaux_tries = reponse_tableaux.data
     noms_tableaux = [row["nom_tableau"] for row in tableaux_tries]
@@ -181,30 +179,11 @@ if len(fichiers_en_base) > 0:
                     unsafe_allow_html=True
                 )
             
-            # --- NOUVEAUTÉ : Zone de Commentaire Libre ---
-            valeur_comm_actuelle = ligne_bdd.get("commentaire", "")
-            if valeur_comm_actuelle is None:
-                valeur_comm_actuelle = ""
-                
-            nouveau_commentaire = st.text_area(
-                "💬 Notes & Commentaires sur ce luminaire :", 
-                value=valeur_comm_actuelle,
-                placeholder="Ex: Référence absente, besoin de clarifier la source d'alimentation...",
-                key=f"comm_{id_ligne}"
-            )
-            
-            # Sauvegarde automatique dès qu'on sort du champ commentaire
-            if nouveau_commentaire != valeur_comm_actuelle:
-                supabase.table("tableaux_recette").update({
-                    "commentaire": nouveau_commentaire,
-                    "verrou_date": datetime.now(timezone.utc).isoformat()
-                }).eq("id", id_ligne).execute()
-                st.toast("Commentaire sauvegardé !", icon="✅")
-                st.rerun()
-
+            # --- NOUVEAUTÉ : Création du bloc conteneur au-dessus du tableau ---
+            entete_tableau = st.container()
             st.markdown("<br>", unsafe_allow_html=True)
             
-            # --- Affichage du tableau de données ---
+            # --- LECTURE ET AFFICHAGE DU TABLEAU ---
             df = pd.read_json(io.StringIO(json.dumps(ligne_bdd["donnees"])), orient='split')
             
             if 'Besoin' not in df.columns and df.index.name == 'Besoin':
@@ -244,6 +223,7 @@ if len(fichiers_en_base) > 0:
             df_str = df.reset_index().fillna("").astype(str)
             edited_str = edited_df.reset_index().fillna("").astype(str)
             
+            # Sauvegarde automatique du tableau
             if not df_str.equals(edited_str):
                 json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
                 supabase.table("tableaux_recette").update({
@@ -252,6 +232,65 @@ if len(fichiers_en_base) > 0:
                 }).eq("id", id_ligne).execute()
                 st.toast("Sauvegardé automatiquement !", icon="💾")
             
+            # --- REMPLISSAGE DU CONTENEUR AU-DESSUS DU TABLEAU ---
+            with entete_tableau:
+                # Ratio 4/5 pour le commentaire, 1/5 pour les boutons
+                col_comm, col_btns = st.columns([4, 1])
+                
+                with col_comm:
+                    valeur_comm_actuelle = ligne_bdd.get("commentaire", "")
+                    if valeur_comm_actuelle is None:
+                        valeur_comm_actuelle = ""
+                        
+                    nouveau_commentaire = st.text_area(
+                        "💬 Notes & Commentaires sur ce luminaire :", 
+                        value=valeur_comm_actuelle,
+                        placeholder="Ex: Référence absente, besoin de clarifier la source d'alimentation...",
+                        key=f"comm_{id_ligne}",
+                        height=110 # Hauteur ajustée pour faire la taille des deux boutons
+                    )
+                    
+                    if nouveau_commentaire != valeur_comm_actuelle:
+                        supabase.table("tableaux_recette").update({
+                            "commentaire": nouveau_commentaire,
+                            "verrou_date": datetime.now(timezone.utc).isoformat()
+                        }).eq("id", id_ligne).execute()
+                        st.toast("Commentaire sauvegardé !", icon="✅")
+                        st.rerun()
+
+                with col_btns:
+                    # On pousse le premier bouton vers le bas pour s'aligner sous le titre "Notes & Commentaires"
+                    st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                    
+                    if st.button("💾 Enregistrer", type="primary", use_container_width=True):
+                        if not df_str.equals(edited_str):
+                            json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
+                            supabase.table("tableaux_recette").update({
+                                "donnees": json_data,
+                                "verrou_date": datetime.now(timezone.utc).isoformat()
+                            }).eq("id", id_ligne).execute()
+                            st.success("✅ Sauvegardé !")
+                        else:
+                            st.info("Aucune modification par rapport au dernier enregistrement.")
+                            
+                    if st.button("🔓 Quitter le tableau", use_container_width=True):
+                        # On sauvegarde au cas où avant de quitter
+                        if not df_str.equals(edited_str):
+                            json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
+                            supabase.table("tableaux_recette").update({
+                                "donnees": json_data,
+                                "verrou_user": None,
+                                "verrou_date": None
+                            }).eq("id", id_ligne).execute()
+                        else:
+                            supabase.table("tableaux_recette").update({
+                                "verrou_user": None,
+                                "verrou_date": None
+                            }).eq("id", id_ligne).execute()
+                        
+                        st.session_state.quitter_tableau = True
+                        st.rerun()
+
             st.markdown("<br>", unsafe_allow_html=True)
 
             with st.expander("➕ Ajouter une nouvelle colonne au tableau"):
@@ -276,70 +315,11 @@ if len(fichiers_en_base) > 0:
                             else:
                                 st.warning("Cette colonne existe déjà !")
 
-            st.markdown("<br>", unsafe_allow_html=True)
-            col_eval, col_save, col_quit = st.columns([2, 1, 1])
-            
-            with col_eval:
-                options_eval = [
-                    "à évaluer", 
-                    "OK", 
-                    "OK mais ajuster (références non identifiées ou hors sujet)", 
-                    "KO : bonnes références non présentées"
-                ]
-                valeur_actuelle = ligne_bdd.get("evaluation", "à évaluer")
-                if valeur_actuelle not in options_eval: 
-                    valeur_actuelle = "à évaluer"
-                    
-                nouvelle_eval = st.selectbox(
-                    "📊 Évaluation Sélection :", 
-                    options_eval, 
-                    index=options_eval.index(valeur_actuelle),
-                    key=f"eval_{id_ligne}"
-                )
-                
-                if nouvelle_eval != valeur_actuelle:
-                    supabase.table("tableaux_recette").update({"evaluation": nouvelle_eval}).eq("id", id_ligne).execute()
-                    st.toast("Évaluation mise à jour !", icon="✅")
-                    st.rerun()
-
-            with col_save:
-                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-                if st.button("💾 Enregistrer", type="primary", use_container_width=True):
-                    if not df_str.equals(edited_str):
-                        json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
-                        supabase.table("tableaux_recette").update({
-                            "donnees": json_data,
-                            "verrou_date": datetime.now(timezone.utc).isoformat()
-                        }).eq("id", id_ligne).execute()
-                        st.success("✅ Sauvegardé !")
-                    else:
-                        st.info("Aucune modification par rapport au dernier enregistrement.")
-
-            with col_quit:
-                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-                if st.button("🔓 Quitter le tableau", use_container_width=True):
-                    if not df_str.equals(edited_str):
-                        json_data = json.loads(edited_df.reset_index().to_json(orient='split'))
-                        supabase.table("tableaux_recette").update({
-                            "donnees": json_data,
-                            "verrou_user": None,
-                            "verrou_date": None
-                        }).eq("id", id_ligne).execute()
-                    else:
-                        supabase.table("tableaux_recette").update({
-                            "verrou_user": None,
-                            "verrou_date": None
-                        }).eq("id", id_ligne).execute()
-                    
-                    st.session_state.quitter_tableau = True
-                    st.rerun()
-
-    # --- NOUVEAUTÉ : Boutons Globaux déplacés tout en bas ---
-    st.markdown("<br><br><br><br><br><br>", unsafe_allow_html=True) # Espacement pour bien séparer
+    # --- Boutons Globaux déplacés tout en bas ---
+    st.markdown("<br><br><br><br><br><br>", unsafe_allow_html=True)
     st.markdown("---")
     st.markdown("### ⚙️ Options globales du fichier")
     
-    # On recalcule les données Excel avec les tableaux non triés
     output_excel = io.BytesIO()
     with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
         for row in tableaux_tries:
