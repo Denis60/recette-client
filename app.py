@@ -55,11 +55,6 @@ def process_csv(file):
         tables[current_title] = current_data
     return tables
 
-def get_type_number(title):
-    match = re.search(r'Type\s+(\d+)', title, re.IGNORECASE)
-    if match: return int(match.group(1))
-    return 9999
-
 def preparer_tableau(csv_string):
     df = pd.read_csv(io.StringIO(csv_string), sep=";", index_col=False)
     df = df.fillna("")
@@ -95,6 +90,7 @@ def preparer_tableau(csv_string):
     return df, colonnes_commentaires
 
 # --- GESTION DES FICHIERS ---
+# On lit les fichiers dispos
 reponse_fichiers = supabase.table("tableaux_recette").select("nom_fichier").execute()
 fichiers_en_base = sorted(list(set([row["nom_fichier"] for row in reponse_fichiers.data])))
 
@@ -118,47 +114,19 @@ if uploaded_files:
                         "nom_fichier": file.name,
                         "nom_tableau": nom_tab,
                         "donnees": json_data,
-                        "evaluation": "à évaluer"
+                        "evaluation": "à évaluer",
+                        "commentaire": ""  # On initie le champ vide
                     }).execute()
             st.success(f"{file.name} importé avec succès !")
             st.rerun()
 
 if len(fichiers_en_base) > 0:
     fichier_selectionne = st.selectbox("1️⃣ Sélectionnez un fichier à recetter :", fichiers_en_base)
-    
-    reponse_excel = supabase.table("tableaux_recette").select("nom_tableau, donnees").eq("nom_fichier", fichier_selectionne).execute()
-    output_excel = io.BytesIO()
-    with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-        tableaux_tries = sorted(reponse_excel.data, key=lambda x: get_type_number(x["nom_tableau"]))
-        for row in tableaux_tries:
-            df_export = pd.read_json(io.StringIO(json.dumps(row["donnees"])), orient='split')
-            nom_onglet = str(row["nom_tableau"])[:31]
-            nom_onglet = re.sub(r'[\\*?:/\[\]]', '', nom_onglet)
-            df_export.to_excel(writer, sheet_name=nom_onglet, index=False)
-            
-    col_dl, col_del = st.columns(2)
-    
-    with col_dl:
-        st.download_button(
-            label="📥 Télécharger tout ce fichier en Excel",
-            data=output_excel.getvalue(),
-            file_name=f"Recette_{fichier_selectionne.replace('.csv', '')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
-        
-    with col_del:
-        if st.button("🗑️ Supprimer définitivement ce fichier", use_container_width=True):
-            with st.spinner("Suppression en cours..."):
-                supabase.table("tableaux_recette").delete().eq("nom_fichier", fichier_selectionne).execute()
-                if "choix_luminaire" in st.session_state:
-                    del st.session_state["choix_luminaire"]
-                st.rerun()
-
     st.markdown("---")
     
+    # On récupère les tableaux SANS forcer le tri (Garde l'ordre d'insertion/CSV)
     reponse_tableaux = supabase.table("tableaux_recette").select("*").eq("nom_fichier", fichier_selectionne).execute()
-    tableaux_tries = sorted(reponse_tableaux.data, key=lambda x: get_type_number(x["nom_tableau"]))
+    tableaux_tries = reponse_tableaux.data
     noms_tableaux = [row["nom_tableau"] for row in tableaux_tries]
     
     OPTION_DEFAUT = "--- Choisir un luminaire ---"
@@ -213,6 +181,30 @@ if len(fichiers_en_base) > 0:
                     unsafe_allow_html=True
                 )
             
+            # --- NOUVEAUTÉ : Zone de Commentaire Libre ---
+            valeur_comm_actuelle = ligne_bdd.get("commentaire", "")
+            if valeur_comm_actuelle is None:
+                valeur_comm_actuelle = ""
+                
+            nouveau_commentaire = st.text_area(
+                "💬 Notes & Commentaires sur ce luminaire :", 
+                value=valeur_comm_actuelle,
+                placeholder="Ex: Référence absente, besoin de clarifier la source d'alimentation...",
+                key=f"comm_{id_ligne}"
+            )
+            
+            # Sauvegarde automatique dès qu'on sort du champ commentaire
+            if nouveau_commentaire != valeur_comm_actuelle:
+                supabase.table("tableaux_recette").update({
+                    "commentaire": nouveau_commentaire,
+                    "verrou_date": datetime.now(timezone.utc).isoformat()
+                }).eq("id", id_ligne).execute()
+                st.toast("Commentaire sauvegardé !", icon="✅")
+                st.rerun()
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # --- Affichage du tableau de données ---
             df = pd.read_json(io.StringIO(json.dumps(ligne_bdd["donnees"])), orient='split')
             
             if 'Besoin' not in df.columns and df.index.name == 'Besoin':
@@ -262,7 +254,6 @@ if len(fichiers_en_base) > 0:
             
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- NOUVEAUTÉ : Ajout de colonnes via un tiroir déroulant ---
             with st.expander("➕ Ajouter une nouvelle colonne au tableau"):
                 col_new_name, col_add_btn = st.columns([3, 1])
                 with col_new_name:
@@ -272,18 +263,16 @@ if len(fichiers_en_base) > 0:
                     if st.button("Ajouter la colonne", use_container_width=True):
                         if nouvelle_colonne:
                             if nouvelle_colonne not in edited_df.columns:
-                                # On ajoute la colonne au tableau avec vos dernières frappes
                                 df_updated = edited_df.reset_index()
                                 df_updated[nouvelle_colonne] = "" 
                                 json_data = json.loads(df_updated.to_json(orient='split'))
                                 
-                                # On met à jour la base de données
                                 supabase.table("tableaux_recette").update({
                                     "donnees": json_data,
                                     "verrou_date": datetime.now(timezone.utc).isoformat()
                                 }).eq("id", id_ligne).execute()
                                 
-                                st.rerun() # Recharge la page pour afficher la nouvelle colonne
+                                st.rerun()
                             else:
                                 st.warning("Cette colonne existe déjà !")
 
@@ -344,6 +333,39 @@ if len(fichiers_en_base) > 0:
                     
                     st.session_state.quitter_tableau = True
                     st.rerun()
+
+    # --- NOUVEAUTÉ : Boutons Globaux déplacés tout en bas ---
+    st.markdown("<br><br><br><br><br><br>", unsafe_allow_html=True) # Espacement pour bien séparer
+    st.markdown("---")
+    st.markdown("### ⚙️ Options globales du fichier")
+    
+    # On recalcule les données Excel avec les tableaux non triés
+    output_excel = io.BytesIO()
+    with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
+        for row in tableaux_tries:
+            df_export = pd.read_json(io.StringIO(json.dumps(row["donnees"])), orient='split')
+            nom_onglet = str(row["nom_tableau"])[:31]
+            nom_onglet = re.sub(r'[\\*?:/\[\]]', '', nom_onglet)
+            df_export.to_excel(writer, sheet_name=nom_onglet, index=False)
+            
+    col_dl, col_del = st.columns(2)
+    
+    with col_dl:
+        st.download_button(
+            label="📥 Télécharger tout ce fichier en Excel",
+            data=output_excel.getvalue(),
+            file_name=f"Recette_{fichier_selectionne.replace('.csv', '')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+        
+    with col_del:
+        if st.button("🗑️ Supprimer définitivement ce fichier", use_container_width=True):
+            with st.spinner("Suppression en cours..."):
+                supabase.table("tableaux_recette").delete().eq("nom_fichier", fichier_selectionne).execute()
+                if "choix_luminaire" in st.session_state:
+                    del st.session_state["choix_luminaire"]
+                st.rerun()
 
 else:
     st.info("La base de données est vide. Veuillez glisser votre premier fichier CSV ci-dessus.")
